@@ -4,7 +4,11 @@ Evolução do fluxo feito em aula: a imagem entra no n8n, é analisada por um mo
 multimodal (Cloudflare Workers AI) e o resultado é **enviado de verdade por e-mail**,
 com a **imagem original no corpo da mensagem** + a **análise gerada pelo modelo**.
 
-Arquivo do fluxo: `n8n-workflow-analise-imagem-email.json` (importável no n8n).
+Arquivos:
+
+- `n8n-workflow-analise-imagem-email.json` – fluxo importável no n8n.
+- `docker-compose.yml` + `.env.example` – sobe o n8n (com Postgres) em containers.
+- `README.md` – este guia.
 
 ```
 Receber imagem ─▶ Preparar imagem ─▶ Analisar imagem (Workers AI) ─▶ Montar e-mail ─▶ Enviar e-mail (SMTP real)
@@ -30,9 +34,53 @@ Se você preferir **continuar o seu fluxo** em vez de importar este inteiro, bas
 4. Garantir que a propriedade binária da imagem se chame `imagem`
    (é o nome usado no `cid:` do HTML e na opção *Attachments* do nó de e-mail).
 
+## Rodando tudo em containers (Docker)
+
+Sobe o **n8n** com **Postgres** (persistência de fluxos/credenciais) e, opcionalmente, o **Mailpit**
+(SMTP fake para testar o e-mail antes do envio real — faz o papel do Ethereal usado em aula).
+O modelo (Cloudflare Workers AI) e o SMTP real continuam sendo serviços externos.
+
+```bash
+# 1. Variáveis de ambiente
+cp .env.example .env
+openssl rand -hex 32          # cole o resultado em N8N_ENCRYPTION_KEY no .env
+#    e defina POSTGRES_PASSWORD
+
+# 2. Sobe n8n + Postgres
+docker compose up -d
+#    -> http://localhost:5678 (na primeira vez, crie o usuário dono)
+
+# 3. (opcional) Importa o fluxo direto pelo CLI do n8n
+docker compose --profile import run --rm n8n-import
+#    ou importe pela interface: Workflows -> Import from File
+
+# 4. (opcional) SMTP fake para testar antes do envio real
+docker compose --profile test up -d mailpit
+#    caixa de entrada: http://localhost:8025
+#    credencial SMTP no n8n: host "mailpit", porta 1025, sem SSL, sem usuário/senha
+
+# Logs / parar / remover tudo (inclui volumes!)
+docker compose logs -f n8n
+docker compose down
+docker compose down -v
+```
+
+Observações:
+
+- `N8N_ENCRYPTION_KEY` criptografa as credenciais salvas; se perdê-la, as credenciais viram inúteis.
+  Guarde-a fora do repositório (o `.env` já está no `.gitignore`).
+- `WEBHOOK_URL` é a URL usada nos links do Form Trigger. Para demonstrar de outro dispositivo
+  (ex.: celular), exponha com um túnel (`ngrok http 5678` / `cloudflared tunnel`) e coloque a URL
+  pública no `.env`, depois `docker compose up -d` de novo.
+- Binários (imagens) ficam em disco (`N8N_DEFAULT_BINARY_DATA_MODE=filesystem`) e o limite de
+  upload está em 16 MB; o fluxo ainda rejeita imagens acima de 2 MB antes de chamar o modelo.
+- Para reprodutibilidade, fixe `N8N_VERSION` no `.env` (ex.: `1.90.2`) em vez de `latest`.
+- Depois de validar com o Mailpit, troque a credencial SMTP do nó **Enviar e-mail (SMTP real)**
+  para o provedor real — é exatamente a "substituição do nó de experimentação" pedida na atividade.
+
 ## Pré-requisitos
 
-- n8n (Cloud ou self-hosted ≥ 1.x).
+- n8n (Cloud, self-hosted ≥ 1.x, ou o `docker-compose.yml` desta pasta — requer Docker + Docker Compose v2).
 - Conta Cloudflare com **Workers AI** habilitado:
   - **Account ID** (Dashboard → Workers & Pages → lado direito da página).
   - **API Token** com permissão `Workers AI – Read` (My Profile → API Tokens → *Create Token*).
