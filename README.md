@@ -17,11 +17,37 @@ Receber imagem ─▶ Preparar imagem ─▶ Analisar imagem (Workers AI) ─▶
 
 ## O que muda em relação ao fluxo da aula
 
-| Aula (experimento)                              | Atividade (entrega real)                                             |
-|-------------------------------------------------|----------------------------------------------------------------------|
-| Nó de teste (Ethereal / "no-op" / visualização) | Nó **Send Email** com credencial SMTP real (Gmail, Outlook, etc.)    |
-| Só a análise (texto)                            | HTML com **imagem inline** (`<img src="cid:imagem">`) + análise      |
-| Destinatário fictício                           | Destinatário real, informado no formulário                            |
+| Aula (experimento)                                        | Atividade (entrega real)                                                  |
+|-----------------------------------------------------------|---------------------------------------------------------------------------|
+| **Send Email** com credencial SMTP do **Ethereal** (fake) | Mesmo nó **Send Email**, credencial SMTP real (Gmail, Outlook, etc.)      |
+| SSL desmarcado, porta 587 (Ethereal)                      | Gmail: porta 465 + SSL marcado (ou 587 sem SSL → STARTTLS)                |
+| HTML só com a análise (`{{ $json.html }}`)                | HTML com **imagem inline** (`<img src="cid:imagem">`) + análise           |
+| Destinatário fictício ("e-mail feio" do Ethereal)         | Destinatário real, informado no formulário                                 |
+| Conferência no painel do Ethereal                         | Conferência na **caixa de entrada real** (é o que o vídeo deve mostrar)   |
+
+### Caminho mínimo: partir do fluxo feito em aula
+
+Em aula o último nó era o **Send Email** apontando para o **Ethereal** (credencial SMTP com
+*SSL desmarcado*, porta 587, destinatário fictício) e o corpo vinha de `{{ $json.html }}` do nó
+anterior. Para cumprir a atividade **sem reconstruir nada**, são só 3 mudanças:
+
+1. **Credencial SMTP** → troque host/porta/usuário/senha do Ethereal pelo provedor real.
+   Atenção ao SSL: no Ethereal ele ficava **desmarcado** (STARTTLS na 587); no Gmail use
+   **porta 465 com SSL marcado** (ou 587 com SSL desmarcado, que o n8n negocia STARTTLS).
+2. **To Email** → em vez do "e-mail feio" do Ethereal, um destinatário real
+   (fixo ou vindo do formulário, ex.: `{{ $('Receber imagem').item.json['E-mail do destinatário'] }}`).
+3. **Imagem no corpo** → o HTML da aula tinha só a análise. Acrescente
+   `<img src="cid:imagem">` no HTML e, no nó Send Email, *Options → Attachments* = `imagem`
+   (nome da propriedade binária que carrega a imagem; o Code *Montar e-mail* deste repositório já faz isso).
+
+Dicas vindas da própria aula:
+
+- Se seu nó de análise ficou com **On Error → Continue** (ou um IF com saídas sucesso/erro) para
+  destravar o teste, desligue isso na versão final: uma falha do modelo não deve gerar e-mail vazio.
+- Depois de mexer no HTML, rode o fluxo **completo** (subindo a imagem de novo); o nó de e-mail
+  sozinho falha porque depende da saída dos nós anteriores.
+
+### Reaproveitando só os nós de e-mail deste repositório
 
 Se você preferir **continuar o seu fluxo** em vez de importar este inteiro, basta:
 
@@ -145,6 +171,7 @@ array de bytes, por isso o nó *Preparar imagem* converte o binário com
 | `Nenhuma imagem recebida no fluxo`                         | O trigger não entregou binário. No Form Trigger, o campo precisa ser do tipo *File*.                              |
 | Imagem aparece só como anexo, não no corpo                 | Versão antiga do nó *Send Email* sem suporte a `cid`. Atualize o n8n ou troque `cid:imagem` por uma URL pública.  |
 | E-mail não chega / cai em spam                             | Confira a senha de app, use porta 465 (SSL) e um *From* igual ao usuário autenticado.                             |
+| `Couldn't connect with these settings` na credencial SMTP  | Combinação porta/SSL errada: 465 → SSL **marcado**; 587 → SSL **desmarcado**. Salve a credencial após alterar.     |
 | Chamada muito lenta                                        | Imagem grande. Reduza para ≤ 1 MB (pode inserir um nó *Edit Image → Resize* antes de *Preparar imagem*).           |
 | `Cannot read properties of undefined (reading 'first')`    | O nome `Preparar imagem` no Code *Montar e-mail* não bate com o nome real do nó no seu fluxo.                     |
 
