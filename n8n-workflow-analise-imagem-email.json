@@ -1,0 +1,183 @@
+{
+  "name": "A3 - Análise de imagem por e-mail (n8n)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Fluxo: imagem → modelo → e-mail real\n\n1. **Receber imagem** – Form Trigger (troque pelo trigger usado em aula, se quiser).\n2. **Preparar imagem** – extrai bytes, valida e renomeia o binário para `imagem`.\n3. **Analisar imagem (Workers AI)** – POST no modelo LLaVA da Cloudflare.\n   ➜ Edite a URL com seu **Account ID** e crie a credencial *Header Auth*\n   (`Authorization: Bearer <API_TOKEN>`).\n4. **Montar e-mail** – HTML com `<img src=\"cid:imagem\">` + análise.\n5. **Enviar e-mail (SMTP real)** – substitui o nó Ethereal/experimentação.\n   ➜ Crie a credencial *SMTP* (ex.: Gmail + senha de app) e ajuste o **From**.\n\nDetalhes e roteiro do vídeo: `README.md` na mesma pasta.",
+        "height": 360,
+        "width": 480
+      },
+      "id": "sticky-1",
+      "name": "Instruções",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "path": "analise-imagem",
+        "formTitle": "Análise de imagem com IA",
+        "formDescription": "Envie uma imagem. O modelo vai analisá-la e o resultado chega por e-mail.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Imagem",
+              "fieldType": "file",
+              "acceptFileTypes": ".jpg,.jpeg,.png,.webp",
+              "multipleFiles": false,
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "E-mail do destinatário",
+              "fieldType": "email",
+              "placeholder": "nome@exemplo.com",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Pergunta para o modelo",
+              "fieldType": "textarea",
+              "placeholder": "Ex.: Descreva esta imagem em detalhes, em português."
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Analisar e enviar por e-mail"
+        }
+      },
+      "id": "node-form",
+      "name": "Receber imagem",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "a3-analise-imagem"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega o primeiro item recebido do trigger (formulário / webhook / etc.)\nconst item = $input.first();\n\n// Descobre a chave binária da imagem (funciona com qualquer trigger:\n// Form Trigger nomeia o binário com o rótulo do campo, Webhook usa \"data\"/\"file0\"...)\nconst chave = Object.keys(item.binary || {})[0];\nif (!chave) {\n  throw new Error('Nenhuma imagem recebida no fluxo. Verifique o nó de entrada.');\n}\n\nconst meta = item.binary[chave];\nif (!String(meta.mimeType || '').startsWith('image/')) {\n  throw new Error(`O arquivo recebido não é uma imagem (mimeType: ${meta.mimeType}).`);\n}\n\n// Buffer real da imagem (funciona tanto com binário em memória quanto em filesystem)\nconst buffer = await this.helpers.getBinaryDataBuffer(0, chave);\n\n// Limite de segurança: imagens muito grandes deixam a chamada lenta/pesada\nconst LIMITE_BYTES = 2 * 1024 * 1024; // 2 MB\nif (buffer.length > LIMITE_BYTES) {\n  throw new Error(`Imagem com ${(buffer.length / 1024 / 1024).toFixed(1)} MB. Use uma imagem de até 2 MB.`);\n}\n\nconst pergunta =\n  String(item.json['Pergunta para o modelo'] || '').trim() ||\n  'Descreva esta imagem em detalhes, em português do Brasil.';\n\nreturn [\n  {\n    json: {\n      destinatario: item.json['E-mail do destinatário'],\n      pergunta,\n      nomeArquivo: meta.fileName || 'imagem',\n      mimeType: meta.mimeType,\n      tamanhoBytes: buffer.length,\n      // Workers AI (LLaVA) recebe a imagem como array de bytes (uint8)\n      imageBytes: Array.from(buffer),\n    },\n    // Renomeia o binário para \"imagem\" - esse nome vira o CID usado no HTML do e-mail\n    binary: { imagem: meta },\n  },\n];\n"
+      },
+      "id": "node-preparar",
+      "name": "Preparar imagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cloudflare.com/client/v4/accounts/SEU_ACCOUNT_ID/ai/run/@cf/llava-hf/llava-1.5-7b-hf",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prompt: $json.pergunta, image: $json.imageBytes, max_tokens: 512 }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "node-http",
+      "name": "Analisar imagem (Workers AI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resposta do modelo (Workers AI) + dados/binário preparados antes da chamada HTTP\nconst resposta = $input.first().json;\nconst prep = $('Preparar imagem').first();\n\n// LLaVA devolve result.description; Llama Vision devolve result.response\nconst analise =\n  resposta?.result?.description ??\n  resposta?.result?.response ??\n  null;\n\nif (!analise) {\n  throw new Error('O modelo não retornou análise. Resposta bruta: ' + JSON.stringify(resposta));\n}\n\n// Escapa HTML para evitar injeção de conteúdo no corpo do e-mail\nconst esc = (s) =>\n  String(s).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\n\nconst dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n\nconst html = `\n<div style=\"font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; color: #222;\">\n  <h2 style=\"color: #1a73e8; margin-bottom: 4px;\">Análise automática de imagem</h2>\n  <p style=\"color: #666; font-size: 13px; margin-top: 0;\">Gerada pelo fluxo n8n em ${esc(dataHora)}</p>\n\n  <h3 style=\"margin-bottom: 8px;\">Imagem original</h3>\n  <!-- \"cid:imagem\" = nome da propriedade binária anexada no nó Send Email -->\n  <img src=\"cid:imagem\" alt=\"${esc(prep.json.nomeArquivo)}\"\n       style=\"max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #ddd;\" />\n  <p style=\"color: #666; font-size: 12px;\">\n    Arquivo: ${esc(prep.json.nomeArquivo)} (${esc(prep.json.mimeType)}, ${(prep.json.tamanhoBytes / 1024).toFixed(0)} KB)\n  </p>\n\n  <h3 style=\"margin-bottom: 8px;\">Pergunta enviada ao modelo</h3>\n  <p style=\"background: #f5f5f5; padding: 10px; border-radius: 6px;\">${esc(prep.json.pergunta)}</p>\n\n  <h3 style=\"margin-bottom: 8px;\">Análise gerada pelo modelo</h3>\n  <p style=\"white-space: pre-wrap; line-height: 1.5;\">${esc(analise)}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #eee; margin-top: 24px;\" />\n  <p style=\"color: #999; font-size: 11px;\">Modelo: Cloudflare Workers AI · Automação: n8n</p>\n</div>`;\n\nconst texto = `Análise automática de imagem (${dataHora})\n\nImagem: ${prep.json.nomeArquivo}\nPergunta: ${prep.json.pergunta}\n\nAnálise gerada pelo modelo:\n${analise}\n`;\n\nreturn [\n  {\n    json: {\n      destinatario: prep.json.destinatario,\n      assunto: `Análise da imagem: ${prep.json.nomeArquivo}`,\n      html,\n      texto,\n      analise,\n    },\n    // Reanexa o binário da imagem para o nó de e-mail conseguir enviá-la\n    binary: prep.binary,\n  },\n];\n"
+      },
+      "id": "node-montar",
+      "name": "Montar e-mail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "Análise de Imagem <SEU_EMAIL@gmail.com>",
+        "toEmail": "={{ $json.destinatario }}",
+        "subject": "={{ $json.assunto }}",
+        "emailFormat": "both",
+        "html": "={{ $json.html }}",
+        "text": "={{ $json.texto }}",
+        "options": {
+          "attachments": "imagem",
+          "appendAttribution": false
+        }
+      },
+      "id": "node-email",
+      "name": "Enviar e-mail (SMTP real)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1040,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Receber imagem": {
+      "main": [
+        [
+          {
+            "node": "Preparar imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar imagem": {
+      "main": [
+        [
+          {
+            "node": "Analisar imagem (Workers AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analisar imagem (Workers AI)": {
+      "main": [
+        [
+          {
+            "node": "Montar e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar e-mail": {
+      "main": [
+        [
+          {
+            "node": "Enviar e-mail (SMTP real)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
