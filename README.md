@@ -4,10 +4,16 @@ Evolução do fluxo feito em aula: a imagem entra no n8n, é analisada por um mo
 multimodal (Cloudflare Workers AI) e o resultado é **enviado de verdade por e-mail**,
 com a **imagem original no corpo da mensagem** + a **análise gerada pelo modelo**.
 
+> **Status: fluxo validado de ponta a ponta em 29/08/2026** — n8n em Docker, análise via
+> Cloudflare Workers AI (LLaVA) e envio real pelo SMTP do Gmail, com a imagem original e a
+> análise chegando no corpo do e-mail do destinatário.
+
 Arquivos:
 
 - `n8n-workflow-analise-imagem-email.json` – fluxo importável no n8n.
 - `docker-compose.yml` + `.env.example` – sobe o n8n (com Postgres) em containers.
+- `video_funcionando_n8n-image-workflow.mp4` – vídeo demonstrativo (fluxo no n8n + e-mail recebido).
+- `car.jpg`, `car2.png` – imagens usadas nos testes/demonstração.
 - `README.md` – este guia.
 
 ```
@@ -145,12 +151,16 @@ suficiente para a atividade.
 
    Sem terminal: **AI → Workers AI → Playground**, escolha o LLaVA e suba uma imagem.
 
-**Configurar no n8n**
+**Configurar no n8n** (o token é usado em um único lugar: a credencial *Header Auth* abaixo,
+que o nó envia no cabeçalho `Authorization` de cada chamada)
 
-1. Abra o nó e, na **URL**, troque `SEU_ACCOUNT_ID` pelo seu Account ID.
-2. Em *Authentication → Generic Credential Type → Header Auth*, crie a credencial:
+1. Abra o nó e, na **URL**, troque `SEU_ACCOUNT_ID` pelo seu Account ID (só o ID; o token não vai na URL).
+2. **Authentication** → `Generic Credential Type` → **Generic Auth Type** → `Header Auth` →
+   **Create new credential**:
    - **Name:** `Authorization`
-   - **Value:** `Bearer SEU_API_TOKEN` (com `Bearer` + espaço antes do token)
+   - **Value:** `Bearer SEU_API_TOKEN` (a palavra `Bearer`, um espaço e o token inteiro)
+3. **Save**. A credencial fica criptografada no n8n (`N8N_ENCRYPTION_KEY`), nunca no JSON do fluxo.
+4. Conferência: execute o nó; a saída deve trazer `"success": true` e `result.description`.
 
 O modelo usado é `@cf/llava-hf/llava-1.5-7b-hf` (imagem → texto). Ele recebe a imagem como
 array de bytes, por isso o nó *Preparar imagem* converte o binário com
@@ -160,11 +170,41 @@ array de bytes, por isso o nó *Preparar imagem* converte o binário com
 > `@cf/meta/llama-3.2-11b-vision-instruct`. O Code *Montar e-mail* já aceita tanto
 > `result.description` (LLaVA) quanto `result.response` (Llama Vision).
 
-### 3. Credencial SMTP (nó *Enviar e-mail (SMTP real)*)
-1. Abra o nó → **Credential to connect with → Create new (SMTP)** e preencha host/porta/usuário/senha
-   conforme o provedor (ver pré-requisitos).
-2. Em **From Email**, troque `SEU_EMAIL@gmail.com` pelo seu endereço (o Gmail ignora um *from*
-   diferente da conta autenticada).
+### 3. Credencial SMTP do Gmail (nó *Enviar e-mail (SMTP real)*)
+
+Este é o passo que substitui o Ethereal da aula por um envio real.
+
+**3a. Gerar a senha de app no Google** (o Gmail não aceita a senha normal da conta em SMTP)
+
+1. https://myaccount.google.com/security → **Verificação em duas etapas** → ative, se necessário.
+2. https://myaccount.google.com/apppasswords → nome `n8n` → **Criar**.
+3. Copie as 16 letras **sem espaços** (`abcd efgh ijkl mnop` → `abcdefghijklmnop`). Só aparece uma vez.
+
+> Contas Google Workspace (empresa/faculdade) podem ter senhas de app bloqueadas pelo administrador;
+> nesse caso use um Gmail pessoal.
+
+**3b. Cadastrar no n8n**
+
+Abra o nó → **Credential to connect with → Create new credential (SMTP)**:
+
+| Campo | Valor |
+|---|---|
+| **User** | `seuemail@gmail.com` |
+| **Password** | senha de app (16 letras, sem espaços) |
+| **Host** | `smtp.gmail.com` |
+| **Port** | `465` |
+| **SSL/TLS** | **marcado** |
+| **Disable STARTTLS** | desmarcado |
+
+**Save** → deve aparecer *Connection tested successfully*. Alternativa equivalente: porta `587` com
+SSL/TLS **desmarcado** (STARTTLS) — a mesma combinação usada com o Ethereal em aula. Não misture
+(`465` sem SSL ou `587` com SSL dá `Couldn't connect with these settings`).
+
+**3c. Ajustar o nó**
+
+1. Em **From Email**, use o **mesmo endereço** do campo *User* (ex.: `Análise de Imagem <seuemail@gmail.com>`);
+   o Gmail sobrescreve remetentes diferentes da conta autenticada e um *from* divergente cai em spam.
+2. **To Email** já vem como `{{ $json.destinatario }}` (e-mail digitado no formulário).
 3. Confira as opções já configuradas:
    - **Email Format:** `both` (HTML + texto puro como fallback).
    - **Attachments:** `imagem` → o n8n anexa o binário com `cid = imagem`, que é referenciado no HTML
@@ -174,7 +214,14 @@ array de bytes, por isso o nó *Preparar imagem* converte o binário com
 1. Clique em **Test workflow** → abre o formulário (ou use a URL de *Test* do Form Trigger).
 2. Envie uma imagem (≤ 2 MB), o e-mail do destinatário e, opcionalmente, uma pergunta.
 3. Acompanhe a execução nó a nó; ao final, abra a caixa de entrada do destinatário.
-4. Quando estiver satisfeito, **Activate** o workflow e use a URL de *Production* do formulário.
+4. Se o primeiro e-mail cair em spam, marque "não é spam" — os seguintes chegam na caixa de entrada.
+5. Quando estiver satisfeito, **Activate** o workflow e use a URL de *Production* do formulário.
+
+### 5. Demonstração
+
+O vídeo `video_funcionando_n8n-image-workflow.mp4` mostra a execução completa: formulário com a
+imagem (`car.jpg` / `car2.png`), execução dos nós no n8n e o e-mail recebido no destinatário com
+a imagem original e a análise do modelo.
 
 ## Roteiro sugerido para o vídeo (2–4 min)
 
@@ -201,6 +248,8 @@ array de bytes, por isso o nó *Preparar imagem* converte o binário com
 | Imagem aparece só como anexo, não no corpo                 | Versão antiga do nó *Send Email* sem suporte a `cid`. Atualize o n8n ou troque `cid:imagem` por uma URL pública.  |
 | E-mail não chega / cai em spam                             | Confira a senha de app, use porta 465 (SSL) e um *From* igual ao usuário autenticado.                             |
 | `Couldn't connect with these settings` na credencial SMTP  | Combinação porta/SSL errada: 465 → SSL **marcado**; 587 → SSL **desmarcado**. Salve a credencial após alterar.     |
+| `535-5.7.8 Username and Password not accepted`             | Usou a senha normal do Gmail em vez da senha de app, ou copiou a senha de app com espaços.                        |
+| `Application-specific password required`                   | Verificação em 2 etapas não está ativa na conta Google.                                                           |
 | Chamada muito lenta                                        | Imagem grande. Reduza para ≤ 1 MB (pode inserir um nó *Edit Image → Resize* antes de *Preparar imagem*).           |
 | `Cannot read properties of undefined (reading 'first')`    | O nome `Preparar imagem` no Code *Montar e-mail* não bate com o nome real do nó no seu fluxo.                     |
 
@@ -208,7 +257,8 @@ array de bytes, por isso o nó *Preparar imagem* converte o binário com
 
 - Token da Cloudflare e senha SMTP ficam **apenas nas credenciais do n8n** — nunca no JSON do fluxo
   nem em texto do vídeo (borre/oculte ao gravar).
-- Use **senha de app**, nunca a senha principal da conta de e-mail.
+- Use **senha de app**, nunca a senha principal da conta de e-mail. Se vazar, revogue em
+  https://myaccount.google.com/apppasswords e gere outra.
 - O conteúdo do modelo é escapado (`&`, `<`, `>`) antes de entrar no HTML, evitando injeção de marcação.
 - O fluxo valida `mimeType` (só imagens) e limita o tamanho a 2 MB antes de chamar a API.
 - Se publicar o formulário em produção, considere restringir o acesso (autenticação básica no Form Trigger).
