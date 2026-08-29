@@ -121,10 +121,36 @@ Observações:
 n8n → **Workflows → Import from File** → selecione o `.json`.
 
 ### 2. Credencial da Cloudflare (nó *Analisar imagem (Workers AI)*)
+
+O Workers AI já vem habilitado em qualquer conta Cloudflare gratuita (sem cartão, sem domínio,
+sem criar Worker) — usamos apenas a API REST. Cota gratuita: 10.000 Neurons/dia, mais do que
+suficiente para a atividade.
+
+**Obter Account ID e API Token**
+
+1. Entre em https://dash.cloudflare.com → menu **AI → Workers AI**. O **Account ID** aparece no
+   lado direito (também está na URL: `dash.cloudflare.com/<ACCOUNT_ID>/...`).
+2. Perfil (canto superior direito) → **My Profile → API Tokens → Create Token** → template
+   **"Workers AI"** (ou manual: *Account · Workers AI · Read*). Copie o token — ele só aparece uma vez.
+3. Teste no terminal antes de ir para o n8n:
+
+   ```bash
+   export CF_ACCOUNT_ID="seu_account_id"; export CF_API_TOKEN="seu_token"
+   curl -s https://api.cloudflare.com/client/v4/user/tokens/verify \
+     -H "Authorization: Bearer $CF_API_TOKEN"            # esperado: "status":"active"
+   curl -s "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/ai/run/@cf/meta/llama-3.1-8b-instruct" \
+     -H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json" \
+     -d '{"prompt":"Diga olá em uma frase."}'              # esperado: "success":true
+   ```
+
+   Sem terminal: **AI → Workers AI → Playground**, escolha o LLaVA e suba uma imagem.
+
+**Configurar no n8n**
+
 1. Abra o nó e, na **URL**, troque `SEU_ACCOUNT_ID` pelo seu Account ID.
 2. Em *Authentication → Generic Credential Type → Header Auth*, crie a credencial:
    - **Name:** `Authorization`
-   - **Value:** `Bearer SEU_API_TOKEN`
+   - **Value:** `Bearer SEU_API_TOKEN` (com `Bearer` + espaço antes do token)
 
 O modelo usado é `@cf/llava-hf/llava-1.5-7b-hf` (imagem → texto). Ele recebe a imagem como
 array de bytes, por isso o nó *Preparar imagem* converte o binário com
@@ -167,7 +193,10 @@ array de bytes, por isso o nó *Preparar imagem* converte o binário com
 
 | Sintoma                                                    | Causa / solução                                                                                                   |
 |------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
-| `401/403` no nó HTTP                                       | Token sem permissão *Workers AI* ou Account ID errado na URL.                                                     |
+| `401` no nó HTTP                                           | Token colado errado, sem o prefixo `Bearer `, ou expirado.                                                        |
+| `403` / erro `10000` no nó HTTP                            | Token sem a permissão *Workers AI · Read* ou criado para outra conta.                                             |
+| `404` no nó HTTP                                           | Account ID errado na URL ou nome do modelo com typo (precisa do prefixo `@cf/`).                                  |
+| Erro de cota (Neurons)                                     | Estourou os 10.000 Neurons gratuitos do dia; aguarde o dia virar ou use um modelo menor (`uform-gen2`).           |
 | `Nenhuma imagem recebida no fluxo`                         | O trigger não entregou binário. No Form Trigger, o campo precisa ser do tipo *File*.                              |
 | Imagem aparece só como anexo, não no corpo                 | Versão antiga do nó *Send Email* sem suporte a `cid`. Atualize o n8n ou troque `cid:imagem` por uma URL pública.  |
 | E-mail não chega / cai em spam                             | Confira a senha de app, use porta 465 (SSL) e um *From* igual ao usuário autenticado.                             |
